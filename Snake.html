@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Snake</title>
+<style>
+  :root {
+    /* Phone shell + keys (the game screen itself is colored in JS: see COLORS) */
+    --page: #121722;
+    --shell-top: #2e3c59;
+    --shell-bot: #222c43;
+    --key: #33425f;
+    --key-hi: #47597f;
+    --key-lo: #141b2b;
+    --key-ink: #d3dcf0;
+    --hint: #8c9ab8;
+    --focus: #96D400;
+    --lcd-bg: #96D400;
+
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { height: 100%; margin: 0; }
+
+  body {
+    background: var(--page);
+    color: var(--hint);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .app {
+    height: 100%;
+    width: 100%;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 12px 12px 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+
+  /* The stage takes all leftover height; JS sizes the canvas to fit it. */
+  .stage {
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* NOTE: padding here must match BEZEL_PAD in the script. */
+  .bezel {
+    position: relative;
+    padding: 14px;
+    border-radius: 26px;
+    background: linear-gradient(180deg, var(--shell-top), var(--shell-bot));
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, .5),
+      inset 0 1px 0 rgba(255, 255, 255, .1),
+      inset 0 -2px 0 rgba(0, 0, 0, .25);
+  }
+  #lcd {
+    display: block;
+    border-radius: 6px;
+    background: var(--lcd-bg);
+    image-rendering: crisp-edges;
+    image-rendering: pixelated;
+  }
+  /* Recessed-glass look over the LCD */
+  .glass {
+    position: absolute;
+    inset: 14px;
+    border-radius: 6px;
+    pointer-events: none;
+    box-shadow:
+      inset 0 0 0 2px rgba(10, 16, 0, .45),
+      inset 0 8px 16px rgba(26, 42, 0, .30);
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+  }
+  .aux { display: flex; gap: 12px; }
+
+  .key {
+    appearance: none;
+    border: 0;
+    padding: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--key);
+    color: var(--key-ink);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    box-shadow: 0 3px 0 var(--key-lo), inset 0 1px 0 var(--key-hi);
+    touch-action: manipulation;
+  }
+  .key:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 1px 0 var(--key-lo), inset 0 1px 0 var(--key-hi); }
+  .key:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+  .key:disabled { opacity: .4; cursor: default; }
+  .key svg { display: block; }
+
+  .dpad {
+    display: none;
+    grid-template-columns: repeat(3, 56px);
+    grid-template-rows: repeat(3, 56px);
+    gap: 4px;
+  }
+  .dpad .key { width: 56px; height: 56px; }
+  .dpad [data-dir="up"]    { grid-column: 2; grid-row: 1; }
+  .dpad [data-dir="left"]  { grid-column: 1; grid-row: 2; }
+  .dpad [data-dir="right"] { grid-column: 3; grid-row: 2; }
+  .dpad [data-dir="down"]  { grid-column: 2; grid-row: 3; }
+  .dpad [data-dir="right"] svg { transform: rotate(90deg); }
+  .dpad [data-dir="down"]  svg { transform: rotate(180deg); }
+  .dpad [data-dir="left"]  svg { transform: rotate(270deg); }
+
+  .hint { margin: 0; font-size: 13px; text-align: center; }
+
+  /* Touch devices: show the D-pad, move pause/sound beside it */
+  body.touch .controls { justify-content: space-between; max-width: 420px; padding: 0 6px; }
+  body.touch .aux { flex-direction: column; }
+  body.touch .dpad { display: grid; }
+  body.touch .hint { display: none; }
+
+  .sr {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+  <main class="app" id="app">
+    <div class="stage" id="stage">
+      <div class="bezel">
+        <canvas id="lcd" role="img" aria-label="Snake game screen"></canvas>
+        <div class="glass"></div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="aux">
+        <button class="key" id="btnPause" type="button" title="Pause (Space)"></button>
+        <button class="key" id="btnSound" type="button" title="Sound on/off (M)"></button>
+      </div>
+      <div class="dpad" id="dpad">
+        <button class="key" type="button" data-dir="up" aria-label="Up"></button>
+        <button class="key" type="button" data-dir="left" aria-label="Left"></button>
+        <button class="key" type="button" data-dir="right" aria-label="Right"></button>
+        <button class="key" type="button" data-dir="down" aria-label="Down"></button>
+      </div>
+    </div>
+
+    <p class="hint">Arrow keys or WASD to steer. Space pauses. M mutes.</p>
+    <div class="sr" id="live" aria-live="polite"></div>
+  </main>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+ *  CONFIG  -  tweak the game here
+ * ===================================================================== */
+const CONFIG = {
+  // Board size in game cells. One cell = CELL_PX x CELL_PX LCD pixels.
+  CELLS_X: 24,
+  CELLS_Y: 30,
+  CELL_PX: 2,
+
+  START_LENGTH: 4,
+
+  // Timing (milliseconds)
+  FIXED_DT: 10,                 // fixed simulation step: game logic always advances in 10 ms slices
+  MAX_FRAME_MS: 250,            // clamp for long frames (tab switch, etc.) so we never "spiral"
+  START_STEP_MS: 150,           // time between snake moves at score 0
+  MIN_STEP_MS: 60,              // fastest allowed time between moves
+  SPEEDUP_EVERY_POINTS: 35,     // every N points...
+  SPEEDUP_MS: 6,                // ...the snake gets this many ms faster per move
+
+  // Scoring
+  FOOD_POINTS: 7,
+  FOOD_GROWTH: 1,               // segments added per regular food
+  BONUS_EVERY: 5,               // a bonus blob appears after this many regular foods
+  BONUS_DURATION_MS: 7000,      // how long the bonus stays (the timer bar)
+  BONUS_BASE_POINTS: 10,        // guaranteed points for catching the bonus...
+  BONUS_TIME_POINTS: 40,        // ...plus up to this many more, scaled by time remaining
+  BONUS_GROWTH: 1,
+
+  // Input
+  SWIPE_MIN_PX: 22,             // finger travel needed to count as a swipe
+  MAX_QUEUED_TURNS: 2,          // buffered direction inputs between two moves
+  RESTART_LOCK_MS: 600,         // ignore restart input briefly after game over
+
+  // Sound
+  VOLUME: 0.06,
+
+  // Storage keys
+  BEST_KEY: 'snake.nokia.best',
+  MUTE_KEY: 'snake.nokia.muted',
+};
+
+const COLORS = {
+  bg:     '#96D400',              // LCD background
+  ink:    '#1a2a00',              // lit pixels
+  ghost:  'rgba(26,42,0,0.07)',   // faint "off" pixels
+  shadow: 'rgba(26,42,0,0.16)',   // soft shadow under lit pixels
+};
+
+// Must equal the .bezel padding in the CSS above.
+const BEZEL_PAD = 14;
+// Largest the LCD may grow on big screens (CSS px).
+const MAX_LCD_CSS_WIDTH = 520;
+
+const {
+  CELLS_X, CELLS_Y, CELL_PX, START_LENGTH, FIXED_DT, MAX_FRAME_MS,
+  START_STEP_MS, MIN_STEP_MS, SPEEDUP_EVERY_POINTS, SPEEDUP_MS,
+  FOOD_POINTS, FOOD_GROWTH, BONUS_EVERY, BONUS_DURATION_MS,
+  BONUS_BASE_POINTS, BONUS_TIME_POINTS, BONUS_GROWTH,
+  SWIPE_MIN_PX, MAX_QUEUED_TURNS, RESTART_LOCK_MS, VOLUME,
+} = CONFIG;
+
+/* =====================================================================
+ *  LCD GEOMETRY (all in LCD "pixels")
+ * ===================================================================== */
+const PLAY_W = CELLS_X * CELL_PX;
+const PLAY_H = CELLS_Y * CELL_PX;
+const MARGIN = 3;
+const HUD_Y  = 3;                         // score digits are 5 px tall
+const PLAY_X = MARGIN + 1;                // +1 for the border line
+const PLAY_Y = HUD_Y + 5 + 1 + 1;         // HUD, 1 gap, 1 border line
+const LCD_W  = PLAY_X + PLAY_W + 1 + MARGIN;
+const LCD_H  = PLAY_Y + PLAY_H + 1 + MARGIN;
+const PLAY_CX = PLAY_X + PLAY_W / 2;      // horizontal center of the play area
+
+/* =====================================================================
+ *  PIXEL FONT (3x5)  -  each glyph is 5 rows of 3 chars, space separated
+ * ===================================================================== */
+const FONT_DATA = {
+  '0':'XXX X.X X.X X.X XXX', '1':'.X. XX. .X. .X. XXX', '2':'XXX ..X XXX X.. XXX',
+  '3':'XXX ..X XXX ..X XXX', '4':'X.X X.X XXX ..X ..X', '5':'XXX X.. XXX ..X XXX',
+  '6':'XXX X.. XXX X.X XXX', '7':'XXX ..X ..X ..X ..X', '8':'XXX X.X XXX X.X XXX',
+  '9':'XXX X.X XXX ..X XXX',
+  'A':'.X. X.X XXX X.X X.X', 'B':'XX. X.X XX. X.X XX.', 'C':'.XX X.. X.. X.. .XX',
+  'D':'XX. X.X X.X X.X XX.', 'E':'XXX X.. XX. X.. XXX', 'G':'.XX X.. X.X X.X .XX',
+  'I':'XXX .X. .X. .X. XXX', 'K':'X.X X.X XX. X.X X.X', 'M':'X.X XXX XXX X.X X.X',
+  'N':'XX. X.X X.X X.X X.X', 'O':'XXX X.X X.X X.X XXX', 'P':'XXX X.X XXX X.. X..',
+  'R':'XX. X.X XX. X.X X.X', 'S':'.XX X.. .X. ..X XX.', 'T':'XXX .X. .X. .X. .X.',
+  'U':'X.X X.X X.X X.X XXX', 'V':'X.X X.X X.X X.X .X.', 'W':'X.X X.X XXX XXX X.X',
+  'Y':'X.X X.X .X. .X. .X.', '!':'.X. .X. .X. ... .X.', '-':'... ... XXX ... ...',
+};
+const FONT = {};
+for (const [ch, rows] of Object.entries(FONT_DATA)) FONT[ch] = rows.split(' ');
+
+/* =====================================================================
+ *  SPRITES
+ * ===================================================================== */
+const FOOD_SPRITE  = ['.X.', 'XXX', '.X.'];                                  // small "+"
+const BONUS_SPRITE = ['.XXXX.', 'XXXXXX', 'XXXXXX', 'XXXXXX', 'XXXXXX', '.XXXX.']; // big blob
+
+// Which game cells does a sprite touch? (used for collisions and spawning)
+function shapeFromSprite(sprite) {
+  const seen = new Set();
+  const cells = [];
+  sprite.forEach((row, y) => [...row].forEach((c, x) => {
+    if (c !== 'X') return;
+    const cx = Math.floor(x / CELL_PX), cy = Math.floor(y / CELL_PX);
+    const k = cx + ',' + cy;
+    if (!seen.has(k)) { seen.add(k); cells.push([cx, cy]); }
+  }));
+  return cells;
+}
+const FOOD_SHAPE  = shapeFromSprite(FOOD_SPRITE);
+const BONUS_SHAPE = shapeFromSprite(BONUS_SPRITE);
+
+/* =====================================================================
+ *  FRAMEBUFFER  -  everything is drawn into a tiny LCD pixel grid,
+ *  then scaled up with a gap between pixels to get the LCD look.
+ * ===================================================================== */
+const fb = new Uint8Array(LCD_W * LCD_H);
+
+function setPx(x, y) {
+  if (x >= 0 && y >= 0 && x < LCD_W && y < LCD_H) fb[y * LCD_W + x] = 1;
+}
+function fillRect(x, y, w, h) {
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) setPx(x + i, y + j);
+}
+function strokeRect(x, y, w, h) {
+  fillRect(x, y, w, 1); fillRect(x, y + h - 1, w, 1);
+  fillRect(x, y, 1, h); fillRect(x + w - 1, y, 1, h);
+}
+function drawSprite(sprite, px, py) {
+  sprite.forEach((row, y) => [...row].forEach((c, x) => { if (c === 'X') setPx(px + x, py + y); }));
+}
+function textWidth(str, scale = 1) { return str.length * 4 * scale - scale; }
+function drawText(str, x, y, scale = 1) {
+  let cx = x;
+  for (const ch of str) {
+    const g = FONT[ch];
+    if (g) g.forEach((row, r) => [...row].forEach((c, col) => {
+      if (c === 'X') fillRect(cx + col * scale, y + r * scale, scale, scale);
+    }));
+    cx += 4 * scale;
+  }
+}
+function drawCentered(str, y, scale = 1) {
+  drawText(str, Math.floor(PLAY_CX - textWidth(str, scale) / 2), y, scale);
+}
+function drawCell(cx, cy) {
+  fillRect(PLAY_X + cx * CELL_PX, PLAY_Y + cy * CELL_PX, CELL_PX, CELL_PX);
+}
+
+/* =====================================================================
+ *  CANVAS / PRESENTATION
+ * ===================================================================== */
+const stage  = document.getElementById('stage');
+const canvas = document.getElementById('lcd');
+const ctx    = canvas.getContext('2d', { alpha: false });
+const ghost  = document.createElement('canvas');   // cached grid of "off" pixels
+let scale = 4;
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const availW = stage.clientWidth  - BEZEL_PAD * 2;
+  const availH = stage.clientHeight - BEZEL_PAD * 2;
+  if (availW <= 0 || availH <= 0) return;
+
+  // Integer scale keeps every LCD pixel identical in size (crisp, even gaps).
+  scale = Math.max(2, Math.floor(Math.min(
+    availW * dpr / LCD_W,
+    availH * dpr / LCD_H,
+    MAX_LCD_CSS_WIDTH * dpr / LCD_W
+  )));
+  canvas.width  = LCD_W * scale;
+  canvas.height = LCD_H * scale;
+  canvas.style.width  = (LCD_W * scale / dpr) + 'px';
+  canvas.style.height = (LCD_H * scale / dpr) + 'px';
+
+  // Rebuild the faint background pixel grid
+  ghost.width = canvas.width; ghost.height = canvas.height;
+  const g = ghost.getContext('2d');
+  const size = scale - gapPx();
+  g.fillStyle = COLORS.ghost;
+  for (let y = 0; y < LCD_H; y++)
+    for (let x = 0; x < LCD_W; x++) g.fillRect(x * scale, y * scale, size, size);
+}
+const gapPx = () => Math.max(1, Math.round(scale * 0.18));
+
+function present() {
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(ghost, 0, 0);
+
+  const size = scale - gapPx();
+  const off  = Math.max(1, Math.round(scale * 0.2));
+  ctx.fillStyle = COLORS.shadow;
+  for (let y = 0, i = 0; y < LCD_H; y++)
+    for (let x = 0; x < LCD_W; x++, i++)
+      if (fb[i]) ctx.fillRect(x * scale + off, y * scale + off, size, size);
+  ctx.fillStyle = COLORS.ink;
+  for (let y = 0, i = 0; y < LCD_H; y++)
+    for (let x = 0; x < LCD_W; x++, i++)
+      if (fb[i]) ctx.fillRect(x * scale, y * scale, size, size);
+}
+
+/* =====================================================================
+ *  SMALL HELPERS
+ * ===================================================================== */
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, String(v)); } catch (e) { /* storage unavailable */ } },
+};
+const pad6 = n => String(Math.min(Math.max(0, n), 999999)).padStart(6, '0');
+const randInt = n => Math.floor(Math.random() * n);
+const live = document.getElementById('live');
+const say = msg => { live.textContent = msg; };
+
+/* =====================================================================
+ *  SOUND (Web Audio, retro square-wave beeps)
+ * ===================================================================== */
+const audio = { ctx: null, muted: store.get(CONFIG.MUTE_KEY) === '1' };
+
+function unlockAudio() {
+  try {
+    if (!audio.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audio.ctx = new AC();
+    }
+    if (audio.ctx.state === 'suspended') audio.ctx.resume();
+  } catch (e) { /* audio unavailable */ }
+}
+
+// notes: [{ f: frequencyHz (0 = rest), d: seconds }]
+function playNotes(notes, type = 'square') {
+  if (audio.muted || !audio.ctx) return;
+  const ac = audio.ctx;
+  let t = ac.currentTime + 0.005;
+  for (const n of notes) {
+    if (n.f > 0) {
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(n.f, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(VOLUME, t + 0.005);
+      gain.gain.setValueAtTime(VOLUME, t + n.d - 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + n.d);
+      osc.connect(gain).connect(ac.destination);
+      osc.start(t);
+      osc.stop(t + n.d + 0.02);
+    }
+    t += n.d;
+  }
+}
+const SFX = {
+  start: () => playNotes([{ f: 523, d: 0.06 }, { f: 784, d: 0.09 }]),
+  eat:   () => playNotes([{ f: 988, d: 0.05 }, { f: 1319, d: 0.06 }]),
+  bonus: () => playNotes([{ f: 659, d: 0.06 }, { f: 880, d: 0.06 }, { f: 1175, d: 0.06 }, { f: 1568, d: 0.14 }]),
+  over:  () => playNotes([{ f: 392, d: 0.14 }, { f: 330, d: 0.14 }, { f: 262, d: 0.14 }, { f: 196, d: 0.36 }]),
+};
+
+/* =====================================================================
+ *  GAME STATE
+ * ===================================================================== */
+const DIRS = {
+  up:    { x: 0,  y: -1 },
+  down:  { x: 0,  y: 1 },
+  left:  { x: -1, y: 0 },
+  right: { x: 1,  y: 0 },
+};
+
+const G = {
+  state: 'title',        // 'title' | 'playing' | 'paused' | 'over'
+  snake: [],             // [{x,y}], index 0 = head
+  dir: DIRS.right,
+  dirQueue: [],
+  grow: 0,               // segments still to add
+  score: 0,
+  eaten: 0,              // regular foods eaten this run
+  food: null,            // {x,y}  top-left cell of the "+" sprite
+  bonus: null,           // {x,y,left}  left = ms remaining
+  moveTimer: 0,
+  best: parseInt(store.get(CONFIG.BEST_KEY), 10) || 0,
+  newBest: false,
+  overAt: 0,
+};
+let uiTime = 0;          // ms of simulated time, drives blinking and title animation
+
+const stepMs = () =>
+  Math.max(MIN_STEP_MS, START_STEP_MS - Math.floor(G.score / SPEEDUP_EVERY_POINTS) * SPEEDUP_MS);
+
+const hits = (item, shape, x, y) => shape.some(([dx, dy]) => item.x + dx === x && item.y + dy === y);
+
+// Find a free spot where `shape` fits without touching the snake or other food.
+function findSpot(shape) {
+  const w = 1 + Math.max(...shape.map(s => s[0]));
+  const h = 1 + Math.max(...shape.map(s => s[1]));
+  const blocked = new Uint8Array(CELLS_X * CELLS_Y);
+  const block = (x, y) => { blocked[y * CELLS_X + x] = 1; };
+  G.snake.forEach(s => block(s.x, s.y));
+  if (G.food)  FOOD_SHAPE.forEach(([dx, dy]) => block(G.food.x + dx, G.food.y + dy));
+  if (G.bonus) BONUS_SHAPE.forEach(([dx, dy]) => block(G.bonus.x + dx, G.bonus.y + dy));
+  const fits = (x, y) => shape.every(([dx, dy]) => !blocked[(y + dy) * CELLS_X + x + dx]);
+
+  for (let t = 0; t < 80; t++) {                       // cheap random tries first
+    const x = randInt(CELLS_X - w + 1), y = randInt(CELLS_Y - h + 1);
+    if (fits(x, y)) return { x, y };
+  }
+  const all = [];                                       // crowded board: scan everything
+  for (let y = 0; y <= CELLS_Y - h; y++)
+    for (let x = 0; x <= CELLS_X - w; x++) if (fits(x, y)) all.push({ x, y });
+  return all.length ? all[randInt(all.length)] : null;
+}
+
+function resetRun() {
+  const y = Math.floor(CELLS_Y / 2);
+  const x = Math.max(START_LENGTH - 1, Math.floor(CELLS_X / 3));
+  G.snake = Array.from({ length: START_LENGTH }, (_, i) => ({ x: x - i, y }));
+  G.dir = DIRS.right;
+  G.dirQueue = [];
+  G.grow = 0;
+  G.score = 0;
+  G.eaten = 0;
+  G.bonus = null;
+  G.food = null;
+  G.moveTimer = 0;
+  G.newBest = false;
+  G.food = findSpot(FOOD_SHAPE);
+}
+
+function startGame() {
+  unlockAudio();
+  resetRun();
+  G.state = 'playing';
+  SFX.start();
+  say('Game started');
+  syncButtons();
+}
+
+function gameOver() {
+  G.state = 'over';
+  G.overAt = uiTime;
+  if (G.score > G.best) {
+    G.best = G.score;
+    G.newBest = true;
+    store.set(CONFIG.BEST_KEY, G.best);
+  }
+  SFX.over();
+  say('Game over. Score ' + G.score + '. Best ' + G.best + '.');
+  syncButtons();
+}
+
+function togglePause() {
+  if (G.state === 'playing') { G.state = 'paused'; say('Paused'); }
+  else if (G.state === 'paused') { G.state = 'playing'; say('Resumed'); }
+  syncButtons();
+}
+
+// One snake move (called by the fixed-step loop whenever moveTimer fills up)
+function moveSnake() {
+  if (G.dirQueue.length) G.dir = G.dirQueue.shift();
+
+  const head = G.snake[0];
+  const nx = head.x + G.dir.x, ny = head.y + G.dir.y;
+
+  if (nx < 0 || ny < 0 || nx >= CELLS_X || ny >= CELLS_Y) return gameOver();   // wall
+
+  let ate = null;
+  if (hits(G.food, FOOD_SHAPE, nx, ny)) ate = 'food';
+  else if (G.bonus && hits(G.bonus, BONUS_SHAPE, nx, ny)) ate = 'bonus';
+
+  const gain = ate === 'food' ? FOOD_GROWTH : ate === 'bonus' ? BONUS_GROWTH : 0;
+  const tailStays = G.grow + gain > 0;
+  // If the tail is about to move away, the head may legally step into its cell.
+  const bodyLen = tailStays ? G.snake.length : G.snake.length - 1;
+  for (let i = 0; i < bodyLen; i++) {
+    if (G.snake[i].x === nx && G.snake[i].y === ny) return gameOver();         // self
+  }
+
+  G.snake.unshift({ x: nx, y: ny });
+  G.grow += gain;
+  if (G.grow > 0) G.grow--; else G.snake.pop();
+
+  if (ate === 'food') {
+    G.score += FOOD_POINTS;
+    G.eaten++;
+    SFX.eat();
+    G.food = findSpot(FOOD_SHAPE);
+    if (!G.food) return gameOver();                                             // board completely full
+    if (G.eaten % BONUS_EVERY === 0 && !G.bonus) {
+      const spot = findSpot(BONUS_SHAPE);
+      if (spot) G.bonus = { x: spot.x, y: spot.y, left: BONUS_DURATION_MS };
+    }
+  } else if (ate === 'bonus') {
+    const frac = Math.max(0, G.bonus.left / BONUS_DURATION_MS);
+    G.score += BONUS_BASE_POINTS + Math.round(BONUS_TIME_POINTS * frac);
+    G.bonus = null;
+    SFX.bonus();
+  }
+}
+
+// Fixed-step update: always called with the same dt
+function update(dt) {
+  uiTime += dt;
+  if (G.state !== 'playing') return;
+
+  G.moveTimer += dt;
+  let step = stepMs();
+  while (G.moveTimer >= step && G.state === 'playing') {
+    G.moveTimer -= step;
+    moveSnake();
+    step = stepMs();
+  }
+  if (G.state === 'playing' && G.bonus) {
+    G.bonus.left -= dt;
+    if (G.bonus.left <= 0) G.bonus = null;                                      // bonus expired
+  }
+}
+
+/* =====================================================================
+ *  RENDERING
+ * ===================================================================== */
+function drawHud() {
+  drawText(pad6(G.score), 3, HUD_Y);
+  if (G.state === 'playing' && G.bonus) {
+    const bx = PLAY_X + PLAY_W - 24 + 1, innerW = 22;   // bar is 24 px wide, right-aligned to the border
+    strokeRect(bx, HUD_Y, 24, 5);
+    fillRect(bx + 1, HUD_Y + 1, Math.ceil(innerW * Math.max(0, G.bonus.left) / BONUS_DURATION_MS), 3);
+  }
+}
+
+function drawField() {
+  G.snake.forEach(s => drawCell(s.x, s.y));
+  if (G.food) drawSprite(FOOD_SPRITE, PLAY_X + G.food.x * CELL_PX, PLAY_Y + G.food.y * CELL_PX);
+  if (G.bonus) {
+    const frac = G.bonus.left / BONUS_DURATION_MS;
+    const hidden = frac < 0.28 && Math.floor(uiTime / 120) % 2 === 1;           // blink when about to vanish
+    if (!hidden) drawSprite(BONUS_SPRITE, PLAY_X + G.bonus.x * CELL_PX, PLAY_Y + G.bonus.y * CELL_PX);
+  }
+}
+
+const blinkOn = (on = 700, off = 400) => (uiTime % (on + off)) < on;
+
+function drawTitle() {
+  drawCentered('SNAKE', 14, 2);
+
+  // A little snake slithering along a sine wave
+  const len = 9, span = CELLS_X + len + 4;
+  const head = Math.floor(uiTime / 70) % span;
+  for (let i = 0; i < len; i++) {
+    const col = head - i;
+    if (col < 0 || col >= CELLS_X) continue;
+    drawCell(col, 12 + Math.round(2 * Math.sin(col * 0.6)));
+  }
+
+  drawCentered('BEST ' + pad6(G.best), 42);
+  if (blinkOn()) {
+    drawCentered('TAP OR PRESS', 50);
+    drawCentered('ANY KEY', 56);
+    drawCentered('TO START', 62);
+  }
+}
+
+function drawPaused() {
+  drawCentered('PAUSED', 24, 2);
+  drawCentered('SPACE OR TAP', 42);
+  drawCentered('TO RESUME', 48);
+}
+
+function drawGameOver() {
+  drawCentered('GAME', 12, 2);
+  drawCentered('OVER', 23, 2);
+  drawCentered('SCORE ' + pad6(G.score), 36);
+  drawCentered('BEST ' + pad6(G.best), 43);
+  if (G.newBest && blinkOn(500, 300)) drawCentered('NEW BEST!', 50);
+  if (uiTime - G.overAt > RESTART_LOCK_MS && blinkOn()) {
+    drawCentered('TAP TO RETRY', 57);
+    drawCentered('OR ANY KEY', 63);
+  }
+}
+
+function render() {
+  fb.fill(0);
+  drawHud();
+  strokeRect(PLAY_X - 1, PLAY_Y - 1, PLAY_W + 2, PLAY_H + 2);   // border around the play area
+  switch (G.state) {
+    case 'title':   drawTitle();    break;
+    case 'playing': drawField();    break;
+    case 'paused':  drawPaused();   break;
+    case 'over':    drawGameOver(); break;
+  }
+  present();
+}
+
+/* =====================================================================
+ *  MAIN LOOP  -  fixed time step, independent of frame rate
+ * ===================================================================== */
+let lastTs = 0, acc = 0;
+function frame(ts) {
+  if (!lastTs) lastTs = ts;
+  let delta = ts - lastTs;
+  lastTs = ts;
+  if (delta > MAX_FRAME_MS) delta = MAX_FRAME_MS;
+
+  acc += delta;
+  while (acc >= FIXED_DT) { update(FIXED_DT); acc -= FIXED_DT; }
+
+  render();
+  requestAnimationFrame(frame);
+}
+
+/* =====================================================================
+ *  INPUT
+ * ===================================================================== */
+function steer(name) {
+  if (G.state !== 'playing') return;
+  const d = DIRS[name];
+  const last = G.dirQueue.length ? G.dirQueue[G.dirQueue.length - 1] : G.dir;
+  if (d === last) return;                                   // already going that way
+  if (d.x === -last.x && d.y === -last.y) return;           // no direct reversing
+  if (G.dirQueue.length >= MAX_QUEUED_TURNS) return;
+  G.dirQueue.push(d);
+}
+
+// "Any key" / tap: starts from the title, restarts after game over, resumes from pause (taps only)
+function primaryAction() {
+  if (G.state === 'title') startGame();
+  else if (G.state === 'over' && uiTime - G.overAt > RESTART_LOCK_MS) startGame();
+}
+
+const KEY_DIRS = {
+  ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+  w: 'up', s: 'down', a: 'left', d: 'right',
+};
+const IGNORED_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Dead', 'Unidentified']);
+
+window.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (IGNORED_KEYS.has(key) || /^F\d+$/.test(key)) return;
+  unlockAudio();
+
+  if (key === 'm') { toggleMute(); return; }
+
+  const dir = KEY_DIRS[key];
+  const isPause = key === ' ' || key === 'p' || key === 'Escape';
+  if (dir || isPause) e.preventDefault();
+
+  const inRun = G.state === 'playing' || G.state === 'paused';
+  if (isPause && inRun) { if (!e.repeat) togglePause(); return; }
+  if (dir && G.state === 'playing') { steer(dir); return; }
+  if (inRun) return;
+  if (!e.repeat) primaryAction();
+});
+// Stops Space from "clicking" a focused button in some browsers
+window.addEventListener('keyup', e => { if (e.key === ' ') e.preventDefault(); });
+
+// Touch: swipe to steer, tap for start / restart / resume
+let touch = null;
+document.addEventListener('pointerdown', e => {
+  unlockAudio();
+  if (e.pointerType === 'touch') setTouchMode(true);
+  if (e.target.closest('button')) return;
+  touch = { id: e.pointerId, x: e.clientX, y: e.clientY, swiped: false };
+});
+document.addEventListener('pointermove', e => {
+  if (!touch || e.pointerId !== touch.id || e.pointerType === 'mouse') return;
+  const dx = e.clientX - touch.x, dy = e.clientY - touch.y;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_MIN_PX) return;
+  steer(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  touch.x = e.clientX; touch.y = e.clientY; touch.swiped = true;   // chained swipes keep working
+});
+document.addEventListener('pointerup', e => {
+  if (!touch || e.pointerId !== touch.id) return;
+  const wasTap = !touch.swiped;
+  touch = null;
+  if (!wasTap) return;
+  if (G.state === 'paused') togglePause();
+  else primaryAction();
+});
+document.addEventListener('pointercancel', () => { touch = null; });
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+// Pause automatically when the page is hidden or loses focus
+const autoPause = () => { if (G.state === 'playing') togglePause(); };
+document.addEventListener('visibilitychange', () => { if (document.hidden) autoPause(); });
+window.addEventListener('blur', autoPause);
+
+/* =====================================================================
+ *  ON-SCREEN BUTTONS
+ * ===================================================================== */
+const ICONS = {
+  pause:    { w: 8, h: 8, body: '<rect x="1" y="1" width="2" height="6"/><rect x="5" y="1" width="2" height="6"/>' },
+  play:     { w: 8, h: 8, body: '<rect x="2" y="1" width="1" height="6"/><rect x="3" y="2" width="1" height="4"/><rect x="4" y="3" width="1" height="2"/>' },
+  soundOn:  { w: 9, h: 8, body: '<rect x="0" y="2" width="2" height="4"/><rect x="2" y="1" width="1" height="6"/><rect x="3" y="0" width="1" height="8"/><rect x="5" y="3" width="1" height="2"/><rect x="7" y="1" width="1" height="6"/>' },
+  soundOff: { w: 9, h: 8, body: '<rect x="0" y="2" width="2" height="4"/><rect x="2" y="1" width="1" height="6"/><rect x="3" y="0" width="1" height="8"/><rect x="5" y="2" width="1" height="1"/><rect x="7" y="2" width="1" height="1"/><rect x="6" y="3" width="1" height="1"/><rect x="5" y="4" width="1" height="1"/><rect x="7" y="4" width="1" height="1"/>' },
+  arrow:    { w: 8, h: 8, body: '<rect x="3" y="0" width="2" height="1"/><rect x="2" y="1" width="4" height="1"/><rect x="1" y="2" width="6" height="1"/><rect x="0" y="3" width="8" height="1"/><rect x="3" y="4" width="2" height="4"/>' },
+};
+// Pixel icons drawn at an integer multiple so edges stay crisp
+function icon(name, k = 3) {
+  const i = ICONS[name];
+  return '<svg width="' + i.w * k + '" height="' + i.h * k + '" viewBox="0 0 ' + i.w + ' ' + i.h +
+         '" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true" focusable="false">' + i.body + '</svg>';
+}
+
+const btnPause = document.getElementById('btnPause');
+const btnSound = document.getElementById('btnSound');
+
+function syncButtons() {
+  const inRun = G.state === 'playing' || G.state === 'paused';
+  btnPause.disabled = !inRun;
+  btnPause.innerHTML = icon(G.state === 'paused' ? 'play' : 'pause');
+  btnPause.setAttribute('aria-label', G.state === 'paused' ? 'Resume' : 'Pause');
+  btnSound.innerHTML = icon(audio.muted ? 'soundOff' : 'soundOn');
+  btnSound.setAttribute('aria-label', audio.muted ? 'Sound off. Turn sound on' : 'Sound on. Turn sound off');
+  btnSound.setAttribute('aria-pressed', String(audio.muted));
+}
+
+function toggleMute() {
+  audio.muted = !audio.muted;
+  store.set(CONFIG.MUTE_KEY, audio.muted ? '1' : '0');
+  if (!audio.muted) { unlockAudio(); SFX.eat(); }
+  syncButtons();
+}
+
+btnPause.addEventListener('click', e => { togglePause(); e.currentTarget.blur(); });
+btnSound.addEventListener('click', e => { toggleMute(); e.currentTarget.blur(); });
+
+document.querySelectorAll('.dpad [data-dir]').forEach(btn => {
+  btn.innerHTML = icon('arrow');
+  btn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    unlockAudio();
+    if (G.state === 'playing') steer(btn.dataset.dir);
+    else primaryAction();
+  });
+  btn.addEventListener('keydown', e => e.preventDefault());   // arrow keys are handled globally
+});
+
+function setTouchMode(on) { document.body.classList.toggle('touch', on); }
+if ((window.matchMedia && matchMedia('(pointer: coarse)').matches) || 'ontouchstart' in window) setTouchMode(true);
+
+/* =====================================================================
+ *  BOOT
+ * ===================================================================== */
+syncButtons();
+new ResizeObserver(resize).observe(stage);
+window.addEventListener('resize', resize);
+resize();
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
