@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#96D400">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Snake</title>
 <style>
   :root {
@@ -26,6 +29,7 @@
   html { scroll-padding-top: env(safe-area-inset-top, 0px); }
   *, *::before, *::after { box-sizing: inherit; }
   html, body { height: 100%; margin: 0; }
+  @supports (height: 100dvh) { html, body { height: 100dvh; } }
 
   body {
     background: var(--page);
@@ -119,27 +123,24 @@
   .key:disabled { opacity: .4; cursor: default; }
   .key svg { display: block; }
 
-  .dpad {
-    display: none;
-    grid-template-columns: repeat(3, 56px);
-    grid-template-rows: repeat(3, 56px);
-    gap: 4px;
-  }
-  .dpad .key { width: 56px; height: 56px; }
-  .dpad [data-dir="up"]    { grid-column: 2; grid-row: 1; }
-  .dpad [data-dir="left"]  { grid-column: 1; grid-row: 2; }
-  .dpad [data-dir="right"] { grid-column: 3; grid-row: 2; }
-  .dpad [data-dir="down"]  { grid-column: 2; grid-row: 3; }
-  .dpad [data-dir="right"] svg { transform: rotate(90deg); }
-  .dpad [data-dir="down"]  svg { transform: rotate(180deg); }
-  .dpad [data-dir="left"]  svg { transform: rotate(270deg); }
 
   .hint { margin: 0; font-size: 13px; text-align: center; }
 
-  /* Touch devices: show the D-pad, move pause/sound beside it */
-  body.touch .controls { justify-content: space-between; max-width: 420px; padding: 0 6px; }
-  body.touch .aux { flex-direction: column; }
-  body.touch .dpad { display: grid; }
+  /* Phones: the LCD fills the whole screen; swipe anywhere to steer.
+     Pause and sound sit in a slim strip underneath. */
+  body.touch { background: var(--lcd-bg); }
+  body.touch .app { max-width: none; padding: 6px 0 4px; gap: 0; }
+  body.touch .bezel { padding: 0; border-radius: 0; background: none; box-shadow: none; }
+  body.touch .glass { display: none; }
+  body.touch #lcd { border-radius: 0; }
+  body.touch .controls { justify-content: center; height: 52px; flex: none; }
+  body.touch .aux { gap: 36px; }
+  body.touch .key {
+    width: 44px; height: 44px; border-radius: 8px;
+    background: transparent; color: #1a2a00; box-shadow: none;
+    border: 2px solid rgba(26, 42, 0, .5);
+  }
+  body.touch .key:focus-visible { outline-color: #1a2a00; }
   body.touch .hint { display: none; }
 
   .sr {
@@ -162,12 +163,6 @@
         <button class="key" id="btnPause" type="button" title="Pause (Space)"></button>
         <button class="key" id="btnSound" type="button" title="Sound on/off (M)"></button>
       </div>
-      <div class="dpad" id="dpad">
-        <button class="key" type="button" data-dir="up" aria-label="Up"></button>
-        <button class="key" type="button" data-dir="left" aria-label="Left"></button>
-        <button class="key" type="button" data-dir="right" aria-label="Right"></button>
-        <button class="key" type="button" data-dir="down" aria-label="Down"></button>
-      </div>
     </div>
 
     <p class="hint">Arrow keys or WASD to steer. Space pauses. M mutes.</p>
@@ -182,7 +177,9 @@
  *  CONFIG  -  tweak the game here
  * ===================================================================== */
 const CONFIG = {
-  // Board size in game cells. One cell = CELL_PX x CELL_PX LCD pixels.
+  // Board size in game cells (desktop). One cell = CELL_PX x CELL_PX LCD pixels.
+  // On phones the board grows automatically to fill the whole screen.
+  // Keep at least 24 x 30 so the title / pause / game-over text fits.
   CELLS_X: 24,
   CELLS_Y: 30,
   CELL_PX: 2,
@@ -207,7 +204,7 @@ const CONFIG = {
   BONUS_GROWTH: 1,
 
   // Input
-  SWIPE_MIN_PX: 22,             // finger travel needed to count as a swipe
+  SWIPE_MIN_PX: 16,             // finger travel needed to count as a swipe
   MAX_QUEUED_TURNS: 2,          // buffered direction inputs between two moves
   RESTART_LOCK_MS: 600,         // ignore restart input briefly after game over
 
@@ -232,7 +229,7 @@ const BEZEL_PAD = 14;
 const MAX_LCD_CSS_WIDTH = 520;
 
 const {
-  CELLS_X, CELLS_Y, CELL_PX, START_LENGTH, FIXED_DT, MAX_FRAME_MS,
+  CELL_PX, START_LENGTH, FIXED_DT, MAX_FRAME_MS,
   START_STEP_MS, MIN_STEP_MS, SPEEDUP_EVERY_POINTS, SPEEDUP_MS,
   FOOD_POINTS, FOOD_GROWTH, BONUS_EVERY, BONUS_DURATION_MS,
   BONUS_BASE_POINTS, BONUS_TIME_POINTS, BONUS_GROWTH,
@@ -242,15 +239,29 @@ const {
 /* =====================================================================
  *  LCD GEOMETRY (all in LCD "pixels")
  * ===================================================================== */
-const PLAY_W = CELLS_X * CELL_PX;
-const PLAY_H = CELLS_Y * CELL_PX;
 const MARGIN = 3;
 const HUD_Y  = 3;                         // score digits are 5 px tall
 const PLAY_X = MARGIN + 1;                // +1 for the border line
 const PLAY_Y = HUD_Y + 5 + 1 + 1;         // HUD, 1 gap, 1 border line
-const LCD_W  = PLAY_X + PLAY_W + 1 + MARGIN;
-const LCD_H  = PLAY_Y + PLAY_H + 1 + MARGIN;
-const PLAY_CX = PLAY_X + PLAY_W / 2;      // horizontal center of the play area
+const EXTRA_W = PLAY_X + 1 + MARGIN;      // LCD width  = play width  + this
+const EXTRA_H = PLAY_Y + 1 + MARGIN;      // LCD height = play height + this
+const MIN_CELLS_X = 24, MIN_CELLS_Y = 30; // the text screens need at least this much room
+
+// The grid is not fixed: on phones it is recomputed to fill the screen.
+let CELLS_X = CONFIG.CELLS_X, CELLS_Y = CONFIG.CELLS_Y;
+let PLAY_W, PLAY_H, LCD_W, LCD_H, PLAY_CX, PANEL_DY, fb;
+
+function setGrid(cx, cy) {
+  CELLS_X = cx; CELLS_Y = cy;
+  PLAY_W = CELLS_X * CELL_PX;
+  PLAY_H = CELLS_Y * CELL_PX;
+  LCD_W  = PLAY_W + EXTRA_W;
+  LCD_H  = PLAY_H + EXTRA_H;
+  PLAY_CX = PLAY_X + PLAY_W / 2;                                  // horizontal center of the play area
+  PANEL_DY = Math.max(0, Math.floor((CELLS_Y - MIN_CELLS_Y) / 2)) * CELL_PX;  // vertical centering of text screens
+  fb = new Uint8Array(LCD_W * LCD_H);
+}
+setGrid(CELLS_X, CELLS_Y);
 
 /* =====================================================================
  *  PIXEL FONT (3x5)  -  each glyph is 5 rows of 3 chars, space separated
@@ -296,7 +307,7 @@ const BONUS_SHAPE = shapeFromSprite(BONUS_SPRITE);
  *  FRAMEBUFFER  -  everything is drawn into a tiny LCD pixel grid,
  *  then scaled up with a gap between pixels to get the LCD look.
  * ===================================================================== */
-const fb = new Uint8Array(LCD_W * LCD_H);
+// (fb itself is allocated in setGrid)
 
 function setPx(x, y) {
   if (x >= 0 && y >= 0 && x < LCD_W && y < LCD_H) fb[y * LCD_W + x] = 1;
@@ -323,7 +334,7 @@ function drawText(str, x, y, scale = 1) {
   }
 }
 function drawCentered(str, y, scale = 1) {
-  drawText(str, Math.floor(PLAY_CX - textWidth(str, scale) / 2), y, scale);
+  drawText(str, Math.floor(PLAY_CX - textWidth(str, scale) / 2), y + PANEL_DY, scale);
 }
 function drawCell(cx, cy) {
   fillRect(PLAY_X + cx * CELL_PX, PLAY_Y + cy * CELL_PX, CELL_PX, CELL_PX);
@@ -340,16 +351,38 @@ let scale = 4;
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  const availW = stage.clientWidth  - BEZEL_PAD * 2;
-  const availH = stage.clientHeight - BEZEL_PAD * 2;
+  const full = isTouch();                    // phone: the LCD fills the whole screen
+  const pad = full ? 0 : BEZEL_PAD;
+  const availW = stage.clientWidth  - pad * 2;
+  const availH = stage.clientHeight - pad * 2;
   if (availW <= 0 || availH <= 0) return;
+  const running = G.state === 'playing' || G.state === 'paused';
 
   // Integer scale keeps every LCD pixel identical in size (crisp, even gaps).
-  scale = Math.max(2, Math.floor(Math.min(
-    availW * dpr / LCD_W,
-    availH * dpr / LCD_H,
-    MAX_LCD_CSS_WIDTH * dpr / LCD_W
-  )));
+  if (full) {
+    const wDev = availW * dpr, hDev = availH * dpr;
+    const fit = Math.min(
+      Math.floor(wDev / (MIN_CELLS_X * CELL_PX + EXTRA_W)),
+      Math.floor(hDev / (MIN_CELLS_Y * CELL_PX + EXTRA_H)));
+    if (!running) {
+      // Pick a chunky pixel size, then grow the board to fill the screen.
+      const want = Math.round(Math.min(9, Math.max(5, availW / 58)) * dpr);
+      scale = Math.max(2, Math.min(want, fit));
+      setGrid(
+        Math.max(MIN_CELLS_X, Math.floor((Math.floor(wDev / scale) - EXTRA_W) / CELL_PX)),
+        Math.max(MIN_CELLS_Y, Math.floor((Math.floor(hDev / scale) - EXTRA_H) / CELL_PX)));
+    } else {
+      // Mid-game (e.g. rotation): keep the board, only shrink if needed.
+      scale = Math.max(2, Math.min(scale, Math.floor(wDev / LCD_W), Math.floor(hDev / LCD_H)));
+    }
+  } else {
+    if (!running) setGrid(CONFIG.CELLS_X, CONFIG.CELLS_Y);
+    scale = Math.max(2, Math.floor(Math.min(
+      availW * dpr / LCD_W,
+      availH * dpr / LCD_H,
+      MAX_LCD_CSS_WIDTH * dpr / LCD_W
+    )));
+  }
   canvas.width  = LCD_W * scale;
   canvas.height = LCD_H * scale;
   canvas.style.width  = (LCD_W * scale / dpr) + 'px';
@@ -393,6 +426,7 @@ const pad6 = n => String(Math.min(Math.max(0, n), 999999)).padStart(6, '0');
 const randInt = n => Math.floor(Math.random() * n);
 const live = document.getElementById('live');
 const say = msg => { live.textContent = msg; };
+const isTouch = () => document.body.classList.contains('touch');
 
 /* =====================================================================
  *  SOUND (Web Audio, retro square-wave beeps)
@@ -630,21 +664,32 @@ function drawTitle() {
   for (let i = 0; i < len; i++) {
     const col = head - i;
     if (col < 0 || col >= CELLS_X) continue;
-    drawCell(col, 12 + Math.round(2 * Math.sin(col * 0.6)));
+    drawCell(col, 12 + PANEL_DY / CELL_PX + Math.round(2 * Math.sin(col * 0.6)));
   }
 
   drawCentered('BEST ' + pad6(G.best), 42);
   if (blinkOn()) {
-    drawCentered('TAP OR PRESS', 50);
-    drawCentered('ANY KEY', 56);
-    drawCentered('TO START', 62);
+    if (isTouch()) {
+      drawCentered('TAP TO START', 50);
+      drawCentered('SWIPE TO', 56);
+      drawCentered('STEER', 62);
+    } else {
+      drawCentered('TAP OR PRESS', 50);
+      drawCentered('ANY KEY', 56);
+      drawCentered('TO START', 62);
+    }
   }
 }
 
 function drawPaused() {
   drawCentered('PAUSED', 24, 2);
-  drawCentered('SPACE OR TAP', 42);
-  drawCentered('TO RESUME', 48);
+  if (isTouch()) {
+    drawCentered('TAP TO', 42);
+    drawCentered('RESUME', 48);
+  } else {
+    drawCentered('SPACE OR TAP', 42);
+    drawCentered('TO RESUME', 48);
+  }
 }
 
 function drawGameOver() {
@@ -655,7 +700,7 @@ function drawGameOver() {
   if (G.newBest && blinkOn(500, 300)) drawCentered('NEW BEST!', 50);
   if (uiTime - G.overAt > RESTART_LOCK_MS && blinkOn()) {
     drawCentered('TAP TO RETRY', 57);
-    drawCentered('OR ANY KEY', 63);
+    if (!isTouch()) drawCentered('OR ANY KEY', 63);
   }
 }
 
@@ -703,8 +748,29 @@ function steer(name) {
 }
 
 // "Any key" / tap: starts from the title, restarts after game over, resumes from pause (taps only)
+let askedFullscreen = false;
+function enterFullscreen() {
+  try {
+    const el = document.documentElement;
+    if (el.requestFullscreen && !document.fullscreenElement) {
+      el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      try { screen.orientation.lock('portrait').catch(() => {}); } catch (e) { /* not supported */ }
+      return true;
+    }
+  } catch (e) { /* not supported (e.g. iOS Safari) */ }
+  return false;
+}
+
 function primaryAction() {
-  if (G.state === 'title') startGame();
+  unlockAudio();
+  if (G.state === 'title') {
+    // First tap on a phone: go fullscreen, wait a moment for the board to resize, then start.
+    if (isTouch() && !askedFullscreen) {
+      askedFullscreen = true;
+      if (enterFullscreen()) { setTimeout(() => { if (G.state === 'title') startGame(); }, 300); return; }
+    }
+    startGame();
+  }
   else if (G.state === 'over' && uiTime - G.overAt > RESTART_LOCK_MS) startGame();
 }
 
@@ -754,9 +820,8 @@ document.addEventListener('pointerup', e => {
   if (!touch || e.pointerId !== touch.id) return;
   const wasTap = !touch.swiped;
   touch = null;
-  if (!wasTap) return;
-  if (G.state === 'paused') togglePause();
-  else primaryAction();
+  if (G.state === 'paused') { if (wasTap) togglePause(); }
+  else primaryAction();          // a tap or a swipe starts / restarts; does nothing mid-game
 });
 document.addEventListener('pointercancel', () => { touch = null; });
 document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
@@ -807,19 +872,12 @@ function toggleMute() {
 btnPause.addEventListener('click', e => { togglePause(); e.currentTarget.blur(); });
 btnSound.addEventListener('click', e => { toggleMute(); e.currentTarget.blur(); });
 
-document.querySelectorAll('.dpad [data-dir]').forEach(btn => {
-  btn.innerHTML = icon('arrow');
-  btn.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    unlockAudio();
-    if (G.state === 'playing') steer(btn.dataset.dir);
-    else primaryAction();
-  });
-  btn.addEventListener('keydown', e => e.preventDefault());   // arrow keys are handled globally
-});
-
-function setTouchMode(on) { document.body.classList.toggle('touch', on); }
-if ((window.matchMedia && matchMedia('(pointer: coarse)').matches) || 'ontouchstart' in window) setTouchMode(true);
+function setTouchMode(on) {
+  if (isTouch() === on) return;
+  document.body.classList.toggle('touch', on);
+  resize();
+}
+if (window.matchMedia && matchMedia('(pointer: coarse)').matches) setTouchMode(true);
 
 /* =====================================================================
  *  BOOT
